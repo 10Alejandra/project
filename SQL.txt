@@ -1,0 +1,232 @@
+DROP TABLE IF EXISTS especialidad;
+DROP TABLE IF EXISTS tipo;
+DROP TABLE IF EXISTS administradora;
+DROP TABLE IF EXISTS facturas;
+DROP TABLE IF EXISTS personal;
+DROP TABLE IF EXISTS especialidad_personal;
+DROP TABLE IF EXISTS paciente;
+DROP TABLE IF EXISTS agenda_detalle_citas;
+DROP TABLE IF EXISTS admision;
+DROP TABLE IF EXISTS agenda_detalle_facturacion;
+
+CREATE TABLE IF NOT EXISTS especialidad(
+	id SERIAL PRIMARY KEY,
+	nombre VARCHAR(100) NOT NULL	
+);
+
+CREATE TABLE IF NOT EXISTS tipo(
+	id VARCHAR(50) PRIMARY KEY,
+	nombre VARCHAR(100) NOT NULL,
+	sw_tiene_costo INT
+);
+
+CREATE TABLE IF NOT EXISTS administradora(
+	id SERIAL PRIMARY KEY,
+	nombre VARCHAR(100) NOT NULL	
+);
+
+CREATE TABLE IF NOT EXISTS paciente(
+	id SERIAL PRIMARY KEY,
+	identificacion VARCHAR(50) UNIQUE NOT NULL,
+	nombre1 VARCHAR (50) NOT NULL,
+	nombre2 VARCHAR (50) NOT NULL,
+	apellido1 VARCHAR(50) NOT NULL,
+	apellido2 VARCHAR(50) NOT NULL,
+	telefono VARCHAR(50) NOT NULL,
+	fecha_nacimiento TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS facturas(
+	id SERIAL PRIMARY KEY,
+	id_paciente INT NOT NULL,
+	id_admision INT NOT NULL,
+	total_factura INT NOT NULL,
+	FOREIGN KEY (id_paciente) REFERENCES paciente(id),
+	FOREIGN KEY (id_admision) REFERENCES admision(id)
+);
+
+CREATE TABLE IF NOT EXISTS admision(
+	id SERIAL PRIMARY KEY,
+	id_paciente INT NOT NULL,
+	id_administradora INT NOT NULL,
+	fecha_creacion TIMESTAMP NOT NULL,
+	FOREIGN KEY (id_paciente) REFERENCES paciente(id),
+	FOREIGN KEY (id_administradora) REFERENCES administradora(id)
+);
+
+CREATE TABLE IF NOT EXISTS personal(
+	id VARCHAR(50) PRIMARY KEY,
+	pnombre VARCHAR(50) NOT NULL,
+	apellido VARCHAR(50) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS especialidad_personal(
+	id_especialida INT NOT NULL,
+	id_personal VARCHAR(50) NOT NULL,
+	FOREIGN KEY (id_especialida) REFERENCES especialidad(id),
+	FOREIGN KEY (id_personal) REFERENCES personal(id)
+);
+
+CREATE TABLE IF NOT EXISTS agenda_detalle_citas(
+	id SERIAL PRIMARY KEY,
+	fecha_cita TIMESTAMP NOT NULL,
+	duracion INT NOT NULL,
+	id_tipo VARCHAR(50) NOT NULL,
+	id_paciente INT NOT NULL,
+	id_personal VARCHAR(50) NOT NULL,
+	FOREIGN KEY (id_tipo) REFERENCES tipo(id),
+	FOREIGN KEY (id_paciente) REFERENCES paciente(id),
+	FOREIGN KEY (id_personal) REFERENCES personal(id) 
+);
+
+CREATE TABLE IF NOT EXISTS agenda_detalle_facturacion(
+	id_admision INT NOT NULL,
+	id_agenda INT NOT NULL,
+	FOREIGN KEY (id_admision) REFERENCES admision(id),
+	FOREIGN KEY (id_agenda) REFERENCES agenda_detalle_citas(id)
+);
+
+
+-- SQL
+--1
+SELECT a.fecha_cita, t.nombre, a.duracion, p.identificacion, 
+CONCAT(p.nombre1,' ',p.nombre2,' ', p.apellido1, ' ', p.apellido2) AS nombre_paciente,
+CONCAT(pl.pnombre,' ', pl.apellido) AS nombre_medico, a.id_tipo 
+FROM agenda_detalle_citas a 
+INNER JOIN tipo t ON a.id_tipo = t.id
+INNER JOIN paciente p ON p.id = a.id_paciente
+INNER JOIN personal pl ON pl.id = a.id_personal
+WHERE  (
+	(
+		SELECT COUNT(id_tipo) FROM agenda_detalle_citas 
+		WHERE id_paciente = a.id_paciente AND id_tipo = 'C' GROUP BY id_paciente, id_tipo
+	) = 1
+OR id_tipo = 'M') 
+AND EXTRACT(MONTH FROM fecha_cita) = 2 AND EXTRACT(DAY FROM fecha_cita) = 2 
+AND (EXTRACT(HOUR FROM fecha_cita) >= 15 AND EXTRACT(HOUR FROM fecha_cita) <= 19);
+
+
+--2
+
+SELECT a.fecha_cita, a.duracion, t.nombre,  
+CONCAT(p.nombre1,' ', p.nombre2,'', p.apellido1,' ',p.apellido2) AS nombre_paciente,
+CONCAT(pl.pnombre,' ', pl.apellido) AS nombre_medico
+FROM agenda_detalle_citas a 
+LEFT JOIN agenda_detalle_facturacion adf ON adf.id_agenda = a.id
+INNER JOIN tipo t ON a.id_tipo = t.id
+INNER JOIN paciente p  ON p.id = a.id_paciente
+INNER JOIN personal pl ON pl.id = a.id_personal
+WHERE adf.id_admision IS NULL AND a.duracion = '6' 
+AND (EXTRACT(MONTH FROM a.fecha_cita)=2 AND EXTRACT(DAY FROM a.fecha_cita)=3) ORDER BY a.fecha_cita;
+
+
+--3
+SELECT  a.id_tipo, DATE(a.fecha_cita), COUNT(ad.id) AS citas, COUNT(fa.id) AS facturas 
+FROM agenda_detalle_citas a 
+INNER JOIN agenda_detalle_facturacion adf ON adf.id_agenda = a.id
+INNER JOIN admision ad ON ad.id = adf.id_admision
+INNER JOIN facturas fa ON fa.id_admision = ad.id
+GROUP BY a.id_tipo, DATE(a.fecha_cita) HAVING COUNT(ad.id) > 26
+
+
+SELECT  a.id_tipo, DATE(a.fecha_cita), COUNT(ad.id) AS citas, COUNT(fa.id) AS facturas 
+FROM admision ad 
+INNER JOIN facturas fa ON fa.id_admision = ad.id
+INNER JOIN agenda_detalle_facturacion adf ON adf.id_admision = ad.id
+LEFT JOIN agenda_detalle_citas a ON a.id = adf.id_agenda
+GROUP BY a.id_tipo, DATE(a.fecha_cita) HAVING COUNT(ad.id) > 1 
+
+--4
+DELETE FROM facturas WHERE id_admision = '3';
+DELETE FROM agenda_detalle_facturacion WHERE id_admision = '3';
+DELETE FROM admision WHERE id = '3';
+
+--5 trigger
+
+CREATE OR REPLACE FUNCTION public_fn_update_factura()
+RETURNS TRIGGER AS $$
+
+DECLARE
+	var_eps VARCHAR;
+	
+BEGIN
+    SELECT dora.nombre 
+	INTO var_eps
+	FROM admision sion 
+	INNER JOIN administradora dora ON sion.id_administradora = dora.id
+	WHERE sion.id = NEW.id_admision;
+	
+   IF(var_eps = 'COLSANITAS')
+   		THEN  NEW.total_factura = NEW.total_factura * 2;
+	ELSIF (var_eps = 'EMSANNAR') 
+		THEN NEW.total_factura = NEW.total_factura - 10000;
+	END IF;
+    RETURN NEW;
+END;
+
+$$
+LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tr_update_facturas ON facturas;
+
+CREATE TRIGGER tr_update_facturas
+BEFORE INSERT ON facturas
+FOR EACH ROW
+EXECUTE FUNCTION public_fn_update_factura();
+
+
+
+///datos
+ INSERT INTO paciente(identificacion, nombre1, nombre2, apellido1, apellido2, telefono, fecha_nacimiento)
+ 	VALUES  ('111','Jose','Manuel','Perez','mina', '12341','2022-02-02 15:15:23'),
+			('112','Maria','Jose','Perez','Flores', '12342','1995-02-02 19:15:23'),
+			('113','Jose','Maria','Cortes','mina', '12343','1997-02-02 07:15:23'),
+			('114','Dilan','Manuel','Flores','Leon', '12344','2002-02-02 20:15:23'),
+			('115','Sofia','Alejandra','Perez','Lopez', '12345','2021-02-02 08:15:23'),
+			('116','Ana','Manuela','Perez','Gutierez', '12346','2023-02-02 03:15:23') RETURNING *
+
+INSERT INTO tipo(id, nombre, sw_tiene_costo)
+	VALUES ('M','Medicina General',100),
+			('C','Control Oftalmología',200),
+			('L', 'Laboratorio',0)RETURNING *
+			
+			
+			
+INSERT INTO personal(id,pnombre,apellido)
+	VALUES ('1','Santiago','Landazuri'),
+			('2','Sandra','Moreno'),
+			('3','Eduardo','Salazar') RETURNING *;
+		
+INSERT INTO agenda_detalle_citas(fecha_cita, duracion, id_tipo, id_paciente, id_personal)
+	VALUES ('2022-02-02 16:02:24','6','M','1','1'),
+			('2022-02-02 16:02:24','6','C','2','2'),
+			('2022-02-02 20:02:24','2','C','2','2'),
+			('2022-02-03 16:02:24','6','M','3','1'),
+			('2022-02-02 19:02:24','6','L','4','3') RETURNING *;
+
+
+INSERT INTO admision (id_paciente, id_administradora, fecha_creacion)
+	VALUES('1','1', '2022-02-04 13:02:20')
+	
+INSERT INTO administradora(nombre) VALUES('EMSANNAR')
+INSERT INTO facturas(id_paciente, id_admision, total_factura) 
+VALUES('6', '2',0),('1', '3',30),('4', '2',100),('3', '3',0)
+
+INSERT INTO agenda_detalle_facturacion(id_admision, id_agenda) 
+VALUES ('2', '10'), ('3', '9')
+
+SELECT * FROM paciente;
+SELECT * FROM tipo;
+SELECT * FROM personal;
+SELECT * FROM agenda_detalle_citas;
+SELECT * FROM admision;
+SELECT * FROM agenda_detalle_facturacion;
+SELECT * FROM facturas;
+
+
+
+
+
+
+
+
